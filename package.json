@@ -1,0 +1,64 @@
+{
+  "name": "vapor",
+  "version": "1.0.0",
+  "description": "Локальное приложение для Steam и Discord",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "node --test test/regression.test.js",
+    "server": "node server/index.js",
+    "electron": "electron electron/main.js",
+    "start": "node server/index.js",
+    "app": "electron electron/main.js",
+    "release:win": "npm run build && electron-builder --win portable --x64"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "build": {
+    "appId": "com.vapor.desktop",
+    "productName": "Vapor",
+    "artifactName": "Vapor-${version}-windows-${arch}.${ext}",
+    "directories": { "output": "release" },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+    "asarUnpack": ["server/discord_dummy.exe"],
+    "win": { "target": "portable", "icon": "public/vapor.ico" }
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "lucide-react": "^1.68.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "steam-user": "^5.3.0",
+    "steamcommunity": "^3.50.3",
+    "tailwind-merge": "^3.7.0",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.4",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "autoprefixer": "^10.6.2",
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

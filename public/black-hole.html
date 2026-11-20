@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Чёрная дыра</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #02030a; overflow: hidden; }
+  /* Холст можно вставить в любой контейнер: position:absolute; inset:0 */
+  #blackhole { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="blackhole" aria-label="Анимированная чёрная дыра с аккреционным диском" role="img"></canvas>
+
+<script id="fs" type="x-shader/x-fragment">
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2  uRes;
+uniform float uTime;
+uniform float uOffset;   // сдвиг дыры вправо (в единицах высоты экрана)
+uniform float uTilt;     // наклон диска на экране (рад)
+uniform float uCamDist;  // расстояние до камеры
+uniform float uElev;     // угол камеры над плоскостью диска (рад)
+uniform float uFocal;    // «зум»
+
+const float RIN  = 2.2;  // внутренний радиус диска (в радиусах Шварцшильда)
+const float ROUT = 10.0;  // внешний радиус диска
+const float BCRIT = 2.598; // критический прицельный параметр (тень дыры)
+
+float hash(vec3 p){
+  p = fract(p * 0.3183099 + 0.1); p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float noise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
+                 mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                 mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+
+const float LOOP = 16.0; // период бесшовного цикла (сек)
+
+// Угловая скорость по Кеплеру: внутри быстрее, снаружи медленнее
+float omega(float r){ return 2.6 / (r * sqrt(r)); }
+
+// Пылевая текстура в системе координат, вращающейся вместе с диском
+float dust(float r, float phi, float tau){
+  float a = phi + tau * omega(r);
+  vec2 cs = vec2(cos(a), sin(a));
+  vec3 q = vec3(cs * 2.2, r * 5.0);
+  // турбулентное искажение: рвёт правильные кольца на клочья
+  q += 1.6 * (vec3(noise(q * 1.7 + 11.0), noise(q * 1.7 + 23.0), noise(q * 1.7 + 37.0)) - 0.5);
+  float n = 0.50 * noise(q)
+          + 0.28 * noise(q * vec3(2.1, 2.1, 2.4) + 5.3)
+          + 0.14 * noise(q * vec3(4.4, 4.4, 5.5) + 9.1)
+          + 0.08 * noise(q * vec3(9.0, 9.0, 12.0) + 2.7);
+  // мелкие рваные штрихи вдоль орбиты (размытие движением), не сплошные линии
+  float st = 0.65 * noise(vec3(cs * 6.0, r * 70.0)) + 0.35 * noise(vec3(cs * 11.0, r * 150.0));
+  return n * (0.55 + 0.9 * st);
+}
+
+// Доплер + гравитационное красное смещение
+float beam(vec3 p, vec3 v, float r){
+  vec3 vd = vec3(p.z, 0.0, -p.x) / r;
+  float beta = min(0.6, sqrt(0.5 / (r - 1.0)));
+  float dop = 1.0 / (1.0 + beta * dot(vd, normalize(v)));
+  return pow(clamp(dop * sqrt(1.0 - 1.0 / r), 0.25, 1.8), 2.5);
+}
+
+// Цвет пыли: тёплый белый у центра, песочный, затем тёмная умбра
+vec3 tint(float x){
+  vec3 c = mix(vec3(1.0, 0.93, 0.82), vec3(0.86, 0.66, 0.48), smoothstep(0.0, 0.45, x));
+  return mix(c, vec3(0.34, 0.21, 0.14), smoothstep(0.4, 1.0, x));
+}
+
+vec4 disk(vec3 p, vec3 v){
+  float r = length(p.xz);
+  float x = clamp((r - RIN) / (ROUT - RIN), 0.0, 1.0);
+  float phi = atan(p.z, p.x);
+
+  // два сдвинутых по фазе слоя пыли: сдвиг слоёв не накапливается, цикл бесшовный
+  float ph = fract(uTime / LOOP);
+  float w1 = 0.5 - 0.5 * cos(6.2831853 * ph), w2 = 1.0 - w1;
+  float n = w1 * dust(r, phi, ph * LOOP) + w2 * dust(r, phi, fract(ph + 0.5) * LOOP);
+  n = clamp(0.5 + (n - 0.5) / sqrt(w1 * w1 + w2 * w2), 0.0, 1.0);
+
+  float band = 0.7 + 0.3 * smoothstep(0.2, 0.7, noise(vec3(r * 2.4, 3.7, 1.3))); // мягкие широкие просветы
+  float edge = smoothstep(0.0, 0.06, x) * (1.0 - smoothstep(4.6, ROUT, r));
+  float dens = clamp(edge * band * (0.55 + 0.5 * smoothstep(0.15, 0.75, n)), 0.0, 0.97);
+
+  float heat = pow(RIN / r, 1.3);
+  vec3 em = tint(x) * beam(p, v, r) * (0.35 + 1.5 * heat) * (0.25 + 1.5 * n);
+  return vec4(em, dens);
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  uv.x -= uOffset;
+  float ct = cos(uTilt), st = sin(uTilt);
+  uv = mat2(ct, -st, st, ct) * uv;
+
+  vec3 ro = uCamDist * vec3(0.0, sin(uElev), cos(uElev));
+  vec3 f  = -normalize(ro);
+  vec3 rt = normalize(cross(f, vec3(0, 1, 0)));
+  vec3 up = cross(rt, f);
+  vec3 v  = normalize(f * uFocal + rt * uv.x + up * uv.y);
+
+  vec3 p = ro;
+  vec3 hv = cross(p, v);
+  float h2 = dot(hv, hv);
+  float b = sqrt(h2);
+
+  vec3 col = vec3(0.0);
+  float T = 1.0;
+  bool captured = false;
+
+  // трассировка луча по геодезической Шварцшильда
+  for (int i = 0; i < 360; i++){
+    float r2 = dot(p, p), r = sqrt(r2);
+    if (r < 1.0) { captured = true; break; }
+    if (r > 30.0 && dot(p, v) > 0.0) break;
+
+    float dt = clamp(0.06 * (r - 0.8), 0.03, 0.6);
+    if (r < ROUT + 1.5) {
+      dt = min(dt, 0.07 + 0.35 * abs(p.y));   // мельче шаг у плоскости диска
+      float hr = length(p.xz);
+      if (hr > RIN && hr < ROUT) {            // рассеянное свечение пылевой «толщины»
+        float hh = 0.05 + 0.025 * hr;
+        float x = (hr - RIN) / (ROUT - RIN);
+        float e = smoothstep(0.0, 0.1, x) * (1.0 - smoothstep(4.6, ROUT, hr));
+        float ha = 1.0 - exp(-1.2 * e * exp(-p.y * p.y / (hh * hh)) * dt);
+        col += T * tint(x) * beam(p, v, hr) * (0.3 + 1.5 * pow(RIN / hr, 1.3)) * 0.7 * ha;
+        T *= 1.0 - ha;
+        if (T < 0.02) break;
+      }
+    }
+    v += -1.5 * h2 * p / (r2 * r2 * r) * dt;
+    vec3 pn = p + v * dt;
+
+    if (p.y * pn.y < 0.0) {            // пересечение плоскости диска
+      float k = p.y / (p.y - pn.y);
+      vec3 hp = mix(p, pn, k);
+      float hr = length(hp.xz);
+      if (hr > RIN && hr < ROUT) {
+        vec4 d = disk(hp, v);
+        col += T * d.rgb * d.a;
+        T *= 1.0 - d.a;
+        if (T < 0.02) break;
+      }
+    }
+    p = pn;
+  }
+
+  if (!captured) {
+    vec3 dir = normalize(v);
+    float s = step(0.9985, hash(floor(dir * 220.0)));       // редкие звёзды
+    vec3 bg = vec3(0.004, 0.006, 0.014) + vec3(0.7, 0.75, 0.9) * s * 0.5;
+    // тонкое фотонное кольцо у границы тени
+    float ring = exp(-max(b - BCRIT, 0.0) / 0.035) * step(BCRIT - 0.02, b);
+    col += T * (bg + vec3(1.0, 0.92, 0.8) * ring * 0.6);
+  }
+
+  col = 1.0 - exp(-col * 1.4);                               // тональная компрессия
+  col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0; // антибэндинг
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+(function () {
+  // ===== Настройки: меняйте под свой проект =====
+  const CONFIG = {
+    renderScale: 1.0,   // keep the background at native resolution
+    maxDpr: 1.5,
+    camDist: 18,        // расстояние до камеры
+    elevation: 8,       // угол над плоскостью диска, градусы (больше — полоса толще, дыра «смотрит» на нас)
+    tilt: 15,           // наклон диска на экране, градусы
+    focal: 1.45,        // масштаб (больше — крупнее дыра)
+    offset: 0.2,        // сдвиг дыры вправо на широких экранах (0 — по центру)
+    speed: 1.0          // скорость вращения диска
+  };
+
+  const canvas = document.getElementById('blackhole');
+  const gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+  if (!gl) {
+    canvas.style.background = 'radial-gradient(circle at 60% 50%, #000 0 14%, #6b4a36 17%, #02030a 45%)';
+    return;
+  }
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER,
+    'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}'));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, document.getElementById('fs').textContent));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'a');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  const u = n => gl.getUniformLocation(prog, n);
+  const U = { res: u('uRes'), time: u('uTime'), offset: u('uOffset'),
+              tilt: u('uTilt'), dist: u('uCamDist'), elev: u('uElev'), focal: u('uFocal') };
+
+  function resize() {
+    const k = Math.min(window.devicePixelRatio || 1, CONFIG.maxDpr) * CONFIG.renderScale;
+    canvas.width  = Math.max(1, Math.floor(canvas.clientWidth * k));
+    canvas.height = Math.max(1, Math.floor(canvas.clientHeight * k));
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', () => { resize(); if (reduced) requestAnimationFrame(frame); });
+  resize();
+
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const t0 = performance.now();
+
+  let lastDraw = 0;
+  function frame(now) {
+    if (!reduced && (document.hidden || now - lastDraw < 50)) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    lastDraw = now;
+    const aspect = canvas.width / canvas.height;
+
+    gl.uniform2f(U.res, canvas.width, canvas.height);
+    gl.uniform1f(U.time, reduced ? 12.0 : (now - t0) / 1000 * CONFIG.speed);
+    gl.uniform1f(U.offset, CONFIG.offset * Math.min(Math.max(aspect - 1, 0), 1));
+    gl.uniform1f(U.tilt, CONFIG.tilt * Math.PI / 180 * Math.min(1, aspect));
+    gl.uniform1f(U.dist, CONFIG.camDist);
+    gl.uniform1f(U.elev, CONFIG.elevation * Math.PI / 180);
+    gl.uniform1f(U.focal, CONFIG.focal * Math.min(1, aspect * 0.9 + 0.1));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    if (!reduced) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

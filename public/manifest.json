@@ -1,0 +1,16 @@
+{
+  "name": "Vapor - Steam Game & Hours Booster",
+  "short_name": "Vapor",
+  "start_url": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "theme_color": "#070605",
+  "background_color": "#070605",
+  "icons": [
+    {
+      "src": "/vapor.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
